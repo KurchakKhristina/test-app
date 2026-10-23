@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>Test App</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 16px; }
+    form { display: flex; gap: 8px; margin-bottom: 20px; }
+    input { flex: 1; padding: 8px; }
+    button { padding: 8px 16px; }
+    li { padding: 6px 0; border-bottom: 1px solid #ddd; }
+    small { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Test App</h1>
+  <p id="status">Перевіряю back...</p>
+
+  <form id="form">
+    <input id="text" placeholder="Нове повідомлення" required>
+    <button>Додати</button>
+  </form>
+
+  <ul id="list"></ul>
+
+  <script>
+    async function checkHealth() {
+      try {
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        document.getElementById('status').textContent = 'Back: ' + data.status;
+      } catch (e) {
+        document.getElementById('status').textContent = 'Back недоступний';
+      }
+    }
+
+    async function loadMessages() {
+      const res = await fetch('/api/messages');
+      const messages = await res.json();
+      const list = document.getElementById('list');
+      list.innerHTML = '';
+      for (const m of messages) {
+        const li = document.createElement('li');
+        li.textContent = m.text + ' ';
+        const time = document.createElement('small');
+        time.textContent = new Date(m.created_at).toLocaleString();
+        li.appendChild(time);
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('text');
+      await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: input.value })
+      });
+      input.value = '';
+      loadMessages();
+    });
+
+    checkHealth();
+    loadMessages();
+  </script>
+</body>
+</html>
