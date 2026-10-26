@@ -1,0 +1,14 @@
+{
+  "name": "test-app-back",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "mysql2": "3.11.5"
+  }
+}

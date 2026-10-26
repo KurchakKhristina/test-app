@@ -1,0 +1,17 @@
+# Модель ALB на ноуті: / → front, /api → back.
+# ${BACKEND_UPSTREAM} і ${FRONTEND_UPSTREAM} підставляються з env при старті контейнера.
+server {
+    listen 80;
+
+    location /api/ {
+        proxy_pass ${BACKEND_UPSTREAM};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location / {
+        proxy_pass ${FRONTEND_UPSTREAM};
+        proxy_set_header Host $host;
+    }
+}

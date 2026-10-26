@@ -1,0 +1,64 @@
+# Спільні змінні підключення до БД для back і migrate
+x-db-env: &db-env
+  DB_HOST: ${DB_HOST}
+  DB_PORT: ${DB_PORT}
+  DB_NAME: ${DB_NAME}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+
+services:
+  db:
+    image: mysql:8.4.3
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ./back
+    image: test-app-back:local
+    command: ["node", "migrate.js"]
+    environment:
+      <<: *db-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  back:
+    build: ./back
+    image: test-app-back:local
+    environment:
+      <<: *db-env
+      PORT: ${BACKEND_PORT}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  front:
+    build: ./front
+    image: test-app-front:local
+
+  proxy:
+    image: nginx:1.27.3-alpine
+    ports:
+      - "${PROXY_PORT}:80"
+    environment:
+      BACKEND_UPSTREAM: http://back:${BACKEND_PORT}
+      FRONTEND_UPSTREAM: http://front:8080
+    volumes:
+      - ./proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - back
+      - front
+
+volumes:
+  dbdata:
