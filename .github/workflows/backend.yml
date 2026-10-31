@@ -1,0 +1,103 @@
+name: backend
+
+on:
+  pull_request:
+    paths: ["back/**", ".aws/task-def-backend.json", ".github/workflows/backend.yml"]
+  push:
+    branches: [main]
+    paths: ["back/**", ".aws/task-def-backend.json", ".github/workflows/backend.yml"]
+  # Ручний запуск — щоб перевірити, що з іншої гілки AssumeRole падає
+  workflow_dispatch:
+
+# OIDC: дозволяє job'у отримати JWT від GitHub. Жодних AWS-ключів у Secrets.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REPOSITORY: ecs-lab/backend
+  ECS_CLUSTER: ecs-testapp
+  ECS_SERVICE: backend-svc
+  CONTAINER_NAME: backend
+  TASK_DEF: .aws/task-def-backend.json
+  # Мережа для одноразової задачі міграцій: private підмережі + app-sg
+  MIGRATE_SUBNETS: subnet-075292e7ea4b87aef,subnet-0526222a3ad1c3632
+  MIGRATE_SG: sg-037473ff0427b3bc9
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install & syntax check
+        working-directory: back
+        run: |
+          npm ci
+          for f in *.js; do node --check "$f"; done
+      - name: Docker build
+        run: docker build --provenance=false ./back
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::028568312595:role/gha-ecs-lab-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push (тег = git SHA)
+        id: image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          docker build --provenance=false -t "$IMAGE" ./back
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ env.TASK_DEF }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.image }}
+
+      # Реєструємо ревізію без деплою — щоб міграції пройшли на новому образі до оновлення сервісу
+      - id: register
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+
+      - name: Migrations (одноразова задача)
+        env:
+          TASK_DEF_ARN: ${{ steps.register.outputs.task-definition-arn }}
+        run: |
+          TASK=$(aws ecs run-task --cluster "$ECS_CLUSTER" --launch-type FARGATE \
+            --task-definition "$TASK_DEF_ARN" \
+            --network-configuration "awsvpcConfiguration={subnets=[$MIGRATE_SUBNETS],securityGroups=[$MIGRATE_SG],assignPublicIp=DISABLED}" \
+            --overrides '{"containerOverrides":[{"name":"backend","command":["node","migrate.js"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          echo "migration task: $TASK"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$TASK"
+          CODE=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "exit code: $CODE"
+          [ "$CODE" = "0" ]
+
+      - name: Deploy service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
